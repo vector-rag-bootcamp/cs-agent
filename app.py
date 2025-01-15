@@ -103,16 +103,21 @@ def load_vectorstore(load_path="./db/faiss"):
     embeddings = load_embeddings()
 
     try:
-        vectorstore = FAISS.load_local(load_path,
-                                       embeddings,
-                                       allow_dangerous_deserialization=True )
-        print(f"Vectorstore loaded from {load_path}")
+        if os.path.exists(load_path):
+
+            vectorstore = FAISS.load_local(load_path,
+                                        embeddings,
+                                        allow_dangerous_deserialization=True )
+            print(f"Vectorstore loaded from {load_path}")
+        else:
+            chunks = load_split_docs()
+            vectorstore = create_vectorstore(chunks, save_path=load_path)
+            print(f"Vectorstore created and saved at {load_path}")
         
         return vectorstore
     except Exception as e:
         print(f"Error loading vectorstore: {e}")
         raise
-
 
 
 # Set Vectorstore and Retriever
