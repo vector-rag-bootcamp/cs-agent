@@ -1,24 +1,20 @@
-import streamlit as st
 import os
 from dotenv import load_dotenv
-import torch
 load_dotenv()
 
 OPENAI_API_KEY = os.environ.get("OPEN_API_KEY")
 GENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL")
 
-from langchain_community.vectorstores import FAISS
-from langchain_community.vectorstores.utils import DistanceStrategy
-from langchain.document_loaders.pdf import PyPDFDirectoryLoader
-from langchain_huggingface.embeddings import HuggingFaceEmbeddings
-from langchain_openai.chat_models import ChatOpenAI
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.prompts import PromptTemplate
-from langchain.chains import create_retrieval_chain
-from langchain.chains.combine_documents import create_stuff_documents_chain
+import streamlit as st
 
+from utils.database import *
+from utils.etc import format_docs, stream_data
 
-st.title("AI Customer Service Center")
+from langchain_openai import ChatOpenAI
+from langchain.prompts import ChatPromptTemplate
+from langchain_core.runnables import RunnablePassthrough
+from langchain_core.output_parsers import StrOutputParser
+
 
 st.markdown(
     """
@@ -36,175 +32,79 @@ st.markdown(
 
 
 st.session_state["genai_model_name"] = "Meta-Llama-3.1-8B-Instruct"
-
-# Initialize chat history
-default_message = { "role": "assistant", "content": "안녕하세요, KT AI 고객센터입니다. 무엇을 도와드릴까요?" }
-if "messages" not in st.session_state:
-    st.session_state.messages = [default_message]
-
-
-def load_split_docs(directory_path='./docs'):
-    """Loads and splits documents into smaller chunks."""
-    try:
-        documents = PyPDFDirectoryLoader(directory_path).load()
-        print(f"Number of source documents: {len(documents)}")
-
-        # Split documents into chunks
-        text_splitter = RecursiveCharacterTextSplitter(chunk_size=512, chunk_overlap=32)
-        chunks = text_splitter.split_documents(documents)
-        print(f"Number of text chunks: {len(chunks)}")
-
-        return chunks
-    except Exception as e:
-        print(f"Error loading or splitting documents: {e}")
-        return []
-    
-
-def load_embeddings(model_name="sentence-transformers/paraphrase-MiniLM-L6-v2"):
-    """Loads HuggingFace embeddings model."""
-    try:
-        # Set embeddings model args
-        model_kwars = {"device": "cuda" if torch.cuda.is_available() else "cpu", 'trust_remote_code': True}
-        encode_kwargs = {"normalize_embeddings": True} # "batch_size": 16
-
-        # Define embeddings
-        embeddings = HuggingFaceEmbeddings(model_name=model_name,
-                                        model_kwargs=model_kwars,
-                                        encode_kwargs=encode_kwargs)
-        print(f"Embeddings loaded: {embeddings != None}")
-
-        return embeddings
-    except Exception as e:
-        print(f"Error loading embeddings: {e}")
-        return None
-
-
-def create_vectorstore(chunks, save_path="./db/faiss"):
-    """Creates a vectorstore using FAISS and HuggingFace embeddings."""
-    try:
-        # Load embeddings
-        embeddings = load_embeddings()
-
-        # Index embeddings
-        vectorstore = FAISS.from_documents(chunks, embeddings, distance_strategy=DistanceStrategy.COSINE)
-        print(f"Vectorstore created.")
-
-        if save_path != "": 
-            vectorstore.save_local(save_path)  # save db in local
-            print(f"Vectorstore saved locally at {save_path}")
-
-        return vectorstore
-    except Exception as e:
-        print(f"Error creating vectorstore: {e}")
-        raise
-
-
-def load_vectorstore(load_path="./db/faiss"):
-    embeddings = load_embeddings()
-
-    try:
-        if os.path.exists(load_path):
-
-            vectorstore = FAISS.load_local(load_path,
-                                        embeddings,
-                                        allow_dangerous_deserialization=True )
-            print(f"Vectorstore loaded from {load_path}")
-        else:
-            chunks = load_split_docs()
-            vectorstore = create_vectorstore(chunks, save_path=load_path)
-            print(f"Vectorstore created and saved at {load_path}")
-        
-        return vectorstore
-    except Exception as e:
-        print(f"Error loading vectorstore: {e}")
-        raise
-
-
-# Set Vectorstore and Retriever
-vs = load_vectorstore()
-retriever = vs.as_retriever(search_kwargs={"k": 5}) # search_type="mmr": 관련성/다양성 고려 비율 설정 가능
+st.session_state["embed_model_name"] = "BAAI/bge-multilingual-gemma2"
 
 
 # Set LLM
-llm = ChatOpenAI(model=st.session_state.genai_model_name,
-                    temperature=0,
-                    base_url=GENAI_BASE_URL)
-
-# Set Prompt
-retrieval_qa_chat_prompt = PromptTemplate(
-    input_variables=["context", "input"],
-    template=(
-        "Use the following context to answer the question in korean.\n\n"
-        "Chat History\n{chat_history}\n\n"
-        "Context:\n{context}\n\n"
-        "Question: {input}\n\n"
-        "Answer:"
-    ),
+llm = ChatOpenAI(
+    model=st.session_state.genai_model_name,
+    temperature=0,
+    max_tokens=None,
+    base_url=GENAI_BASE_URL,
+    api_key=OPENAI_API_KEY
 )
 
-# Set Chains
-combine_docs_chain = create_stuff_documents_chain(llm, retrieval_qa_chat_prompt)
-rag_chain = create_retrieval_chain(retriever, combine_docs_chain)
+# Set Prompt
+template = """다음 문맥을 기반으로 질문에 답변하세요:
+{context}
+
+질문: {question}
+"""
+
+prompt_template = ChatPromptTemplate.from_template(template)
+
+retriever = st.session_state.retriver
+
+chain = (
+    {"context": retriever | format_docs, "question": RunnablePassthrough()}
+    | prompt_template
+    | llm
+    | StrOutputParser()
+)
 
 
-def format_chat_history(messages):
-    """Formats chat history into a single string for RAG input."""
-    formatted_history = ""
-    for msg in messages:
-        role = "User" if msg["role"] == "user" else "Assistant"
-        formatted_history += f"{role}: {msg['content']}\n"
-    return formatted_history.strip()
-
-
-# Pages, Sidebar
+# 1. Chat Page
 def chat(): # st.Page의 첫번재 parameter는 "~.py" 파이썬 파일 명 또는 함수명
-    # Display chat messages from history on app rerun
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
+    # st.title("AI 고객 지원 센터")
+    st.info("""안녕하세요. AI 고객 지원 센터입니다. 무엇을 도와드릴까요? :sunglasses:""", icon="ℹ️")
+    st.divider()
 
     # Accept user input
-    if prompt := st.chat_input("What is up?"):
+    if prompt := st.chat_input("Type a message..."):
         # Display user message in chat message container
         with st.chat_message("user"):
             st.markdown(prompt)
+        
+        try:
+            # Invoke RAG chain
+            with st.chat_message("assistant"):
+                with st.spinner('Waiting...'):
+                    full_response = chain.invoke(prompt)
+                
+                st.write_stream(stream_data(full_response))
 
-        # Add user message to chat history
-        st.session_state.messages.append({"role": "user", "content": prompt})
-
-        # Format chat history
-        chat_history = format_chat_history(st.session_state.messages)
-
-        # Combine chat history with context
-        input_data = {
-            "input": prompt,
-            "chat_history": chat_history,
-        }
-
-        # Invoke RAG chain
-        response = rag_chain.invoke(input_data)
-        full_response = response['answer']
-        # full_response = llm.invoke(prompt)
-        with st.chat_message("assistant"):
-            st.write(full_response)
-
-        # Add assistant response to chat history
-        st.session_state.messages.append({"role": "assistant", "content": full_response})
+        except Exception as e:
+            # Handle potential errors
+            st.write(f"Error processing the request: {e}")
 
 
+# 2. Settings Page
 def settings():
-    st.write(st.session_state.bar)
+    # st.title("AI 고객 지원 센터: 설정")
+    st.warning("안녕하세요. 이곳은 설정페이지입니다.", icon="⚙️")
+    st.divider()
+    
+    st.subheader(":mag: RAG 구성")
+    st.write(f"- Generator: {st.session_state.genai_model_name}\n- Embedding: {st.session_state.embed_model_name}\n- Retriver: FAISS")
+    
+    st.subheader(f":globe_with_meridians: Web 검색")
+    st.write("- ON" if st.session_state.bar else "- OFF")
 
 
 # Widgets shared by all the pages
-st.sidebar.checkbox("Bar", [True, False], key="bar")
+st.sidebar.checkbox(":globe_with_meridians: web 검색", [True, False], key="bar")
+
 
 pages = [st.Page(chat, title="chat", icon="💬"), st.Page(settings, title="settings", icon="⚙️")]
 pg = st.navigation(pages)
 pg.run()
-
-
-
-
-
-
