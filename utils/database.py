@@ -9,6 +9,11 @@ from langchain.document_loaders.pdf import PyPDFDirectoryLoader
 from langchain_huggingface.embeddings import HuggingFaceEmbeddings
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 
+import requests
+from bs4 import BeautifulSoup  # 웹 페이지에 들어가서 웹 피이지를 document chunk를 변환
+from googlesearch import search  # 구글 검색기
+from langchain.docstore.document import Document
+
 
 def load_split_docs(directory_path='./docs'):
     """Loads and splits documents into smaller chunks."""
@@ -24,6 +29,27 @@ def load_split_docs(directory_path='./docs'):
         return chunks
     except Exception as e:
         print(f"Error loading or splitting documents: {e}")
+        return []
+    
+
+def web_search_split_docs(query):
+    """Search (web) and splits documents into smaller chunks."""
+    try:
+        web_documents = []
+        for result_url in search(query, tld="com", num=5, stop=10, pause=2):
+            response = requests.get(result_url)
+            soup = BeautifulSoup(response.text, "html.parser")
+            web_documents.append(soup.get_text())
+
+        docs = [Document(page_content=web_txt, metadata={"source": "web"}) for web_txt in web_documents]
+        print(f"Number of source documents: {len(docs)}")
+
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=512, chunk_overlap=32)
+        chunks = text_splitter.split_documents(docs)
+
+        return chunks
+    except Exception as e:
+        print(f"Error searching web or splitting documents: {e}")
         return []
     
 
@@ -66,7 +92,7 @@ def create_vectorstore(chunks, save_path="./db/faiss"):
         raise
 
 
-def load_vectorstore(load_path="./db/faiss"):
+def load_vectorstore(load_path="./db/faiss", isWeb=False):
     embeddings = load_embeddings()
 
     try:
@@ -77,7 +103,7 @@ def load_vectorstore(load_path="./db/faiss"):
                                         allow_dangerous_deserialization=True)
             print(f"Vectorstore loaded from {load_path}")
         else:
-            chunks = load_split_docs()
+            chunks = load_split_docs() if not isWeb else web_search_split_docs("KT 모바일 요금제")
             vectorstore = create_vectorstore(chunks, save_path=load_path)
             print(f"Vectorstore created and saved at {load_path}")
         
@@ -89,5 +115,5 @@ def load_vectorstore(load_path="./db/faiss"):
         
         
 # Set Vectorstore and Retriever
-st.session_state.vectorstore = load_vectorstore()
+st.session_state.vectorstore = load_vectorstore(isWeb=st.session_state.bar)
 st.session_state.retriver = st.session_state.vectorstore.as_retriever(search_kwargs={"k": 5}) # search_type="mmr": 관련성/다양성 고려 비율 설정 가능
