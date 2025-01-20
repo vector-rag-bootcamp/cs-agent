@@ -45,10 +45,19 @@ llm = ChatOpenAI(
 )
 
 # Set Prompt
-template = """다음 문맥을 기반으로 질문에 답변하세요:
+template = """
+다음 문맥을 기반으로 질문에 답변하세요:
 {context}
 
 질문: {question}
+
+답변을 단계적으로 사고 과정을 통해 생성하세요:
+1. 질문을 분석합니다.
+2. 문맥에서 관련 정보를 식별합니다.
+3. 질문에 답하기 위한 논리적 단계를 나열합니다.
+4. 최종적으로 질문에 대한 명확하고 간결한 답을 제공합니다.
+
+답변:
 """
 
 prompt_template = ChatPromptTemplate.from_template(template)
