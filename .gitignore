@@ -1,5 +1,5 @@
+utils/__pycache__/
 .env
 __pycache__/
 .ipynb_checkpoints/
 db/
-docs/

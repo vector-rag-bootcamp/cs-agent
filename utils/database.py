@@ -4,7 +4,7 @@ import streamlit as st
 
 from langchain_community.vectorstores import FAISS
 from langchain_community.vectorstores.utils import DistanceStrategy
-from langchain.document_loaders.pdf import PyPDFDirectoryLoader
+from langchain_community.document_loaders import PyPDFDirectoryLoader
 
 from langchain_huggingface.embeddings import HuggingFaceEmbeddings
 from langchain.text_splitter import RecursiveCharacterTextSplitter
@@ -15,7 +15,7 @@ from googlesearch import search  # 구글 검색기
 from langchain.docstore.document import Document
 
 
-def load_split_docs(directory_path='./docs'):
+def load_split_docs(directory_path='/projects/RAG2/kt-1/PDFs'):
     """Loads and splits documents into smaller chunks."""
     try:
         documents = PyPDFDirectoryLoader(directory_path).load()
@@ -36,9 +36,17 @@ def web_search_split_docs(query):
     """Search (web) and splits documents into smaller chunks."""
     try:
         web_documents = []
-        for result_url in search(query, tld="com", num=5, stop=10, pause=2):
+        for result_url in search(f'{query} site:kt.com', tld="com", num=5, stop=10, pause=2):
+            print(result_url)
+            print()
+            print()
+            
             response = requests.get(result_url)
+            response.encoding = 'utf-8'
             soup = BeautifulSoup(response.text, "html.parser")
+            print(soup)
+            print()
+            print()
             web_documents.append(soup.get_text())
 
         docs = [Document(page_content=web_txt, metadata={"source": "web"}) for web_txt in web_documents]
@@ -53,17 +61,18 @@ def web_search_split_docs(query):
         return []
     
 
-def load_embeddings(model_name="BAAI/bge-base-en-v1.5"): # "BAAI/bge-multilingual-gemma2"):
+def load_embeddings(model_name="BAAI/bge-base-en-v1.5"): # "BAAI/bge-base-en-v1.5"
     """Loads HuggingFace embeddings model."""
     try:
         # Set embeddings model args
-        model_kwars = {"device": "cuda" if torch.cuda.is_available() else "cpu", 'trust_remote_code': True}
+        model_kwargs = {"device": "cuda" if torch.cuda.is_available() else "cpu", 'trust_remote_code': True}
         encode_kwargs = {"normalize_embeddings": True} # "batch_size": 16
 
         # Define embeddings
         embeddings = HuggingFaceEmbeddings(model_name=model_name,
-                                        model_kwargs=model_kwars,
+                                        model_kwargs=model_kwargs,
                                         encode_kwargs=encode_kwargs)
+        
         print(f"Embeddings loaded: {embeddings != None}")
 
         return embeddings
@@ -72,11 +81,11 @@ def load_embeddings(model_name="BAAI/bge-base-en-v1.5"): # "BAAI/bge-multilingua
         return None
 
 
-def create_vectorstore(chunks, save_path="./db/faiss"):
+def create_vectorstore(chunks, save_path="./db/faiss", embedding_model="BAAI/bge-base-en-v1.5"):
     """Creates a vectorstore using FAISS and HuggingFace embeddings."""
     try:
         # Load embeddings
-        embeddings = load_embeddings()
+        embeddings = load_embeddings(embedding_model)
 
         # Index embeddings
         vectorstore = FAISS.from_documents(chunks, embeddings, distance_strategy=DistanceStrategy.COSINE)
@@ -92,8 +101,8 @@ def create_vectorstore(chunks, save_path="./db/faiss"):
         raise
 
 
-def load_vectorstore(load_path="./db/faiss", isWeb=False):
-    embeddings = load_embeddings()
+def load_vectorstore(load_path="./db/faiss", isWeb=False, embedding_model="BAAI/bge-base-en-v1.5"):
+    embeddings = load_embeddings(embedding_model)
 
     try:
         if os.path.exists(load_path):
@@ -111,9 +120,3 @@ def load_vectorstore(load_path="./db/faiss", isWeb=False):
     except Exception as e:
         print(f"Error loading vectorstore: {e}")
         raise
-
-        
-        
-# Set Vectorstore and Retriever
-st.session_state.vectorstore = load_vectorstore(isWeb=st.session_state.bar)
-st.session_state.retriver = st.session_state.vectorstore.as_retriever(search_kwargs={"k": 5}) # search_type="mmr": 관련성/다양성 고려 비율 설정 가능
